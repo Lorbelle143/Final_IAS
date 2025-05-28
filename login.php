@@ -1,39 +1,48 @@
 <?php
 session_start();
+date_default_timezone_set('Asia/Manila');
+require 'config.php';
 
-$usersFile = 'users.json';
-$users = file_exists($usersFile) ? json_decode(file_get_contents($usersFile), true) : [];
+$error = '';  // Add this to display errors properly in HTML
 
-$errors = [];
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $username = trim($_POST['username'] ?? '');
+if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    $usernameOrEmail = trim($_POST['username'] ?? '');  // trim to avoid whitespace issues
     $password = $_POST['password'] ?? '';
 
-    if (!$username || !$password) {
-        $errors[] = "Both fields are required.";
+    if (empty($usernameOrEmail) || empty($password)) {
+        $error = "Please enter both username/email and password.";
     } else {
-        $foundUser = null;
-        foreach ($users as $user) {
-            if (strcasecmp($user['username'], $username) === 0) {
-                $foundUser = $user;
-                break;
-            }
-        }
+        // Lowercase for case-insensitive match (optional but recommended)
+        $usernameOrEmailLower = strtolower($usernameOrEmail);
 
-        if (!$foundUser) {
-            $errors[] = "Invalid username or password.";
-        } elseif (!password_verify($password, $foundUser['password'])) {
-            $errors[] = "Invalid username or password.";
-        } elseif (empty($foundUser['verified']) || $foundUser['verified'] === false) {
-            $errors[] = "Please verify your email before logging in.";
+        // Modify query to use LOWER() on database fields for case-insensitive check
+        $stmt = $conn->prepare("SELECT id, username, email, password FROM user WHERE LOWER(email) = ? OR LOWER(username) = ?");
+        if (!$stmt) {
+            $error = "Database error: " . $conn->error;
         } else {
-            $_SESSION['user'] = [
-                'username' => $foundUser['username'],
-                'email' => $foundUser['email'],
-            ];
-            header("Location: incident_submit.php");
-            exit();
+            $stmt->bind_param("ss", $usernameOrEmailLower, $usernameOrEmailLower);
+            $stmt->execute();
+            $result = $stmt->get_result();
+
+            if ($result->num_rows > 0) {
+                $user = $result->fetch_assoc();
+
+                if (password_verify($password, $user['password'])) {
+                    // Set session variables
+                    $_SESSION['user_id'] = $user['id'];
+                    $_SESSION['username'] = $user['username'];
+                    $_SESSION['email'] = $user['email'];
+                    $_SESSION['user_logged_in'] = true; // Important!
+
+                    header("Location: dashboard.php");
+                    exit();
+                } else {
+                    $error = "Invalid password.";
+                }
+            } else {
+                $error = "User not found.";
+                error_log("Login failed: user not found for input: $usernameOrEmail");
+            }
         }
     }
 }
@@ -42,52 +51,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<title>User Login</title>
-<style>
-/* Keep previous styles */
-body { font-family: Arial, sans-serif; background:#f4f7f8; padding: 30px; }
-.container { max-width: 400px; margin: auto; background: white; padding: 25px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.15);}
-h2 { margin-bottom: 20px; color: #333; }
-input[type=text], input[type=password] {
-    width: 100%; padding: 10px; margin: 8px 0; border-radius: 5px; border: 1px solid #ccc;
-    box-sizing: border-box;
-}
-button {
-    background-color: #007bff; color: white; padding: 10px; border: none; border-radius: 5px; cursor: pointer;
-    width: 100%; font-size: 16px;
-}
-button:hover { background-color: #0056b3; }
-.error { color: red; margin-bottom: 15px; }
-a { color: #007bff; text-decoration: none; }
-a:hover { text-decoration: underline; }
-</style>
+    <meta charset="UTF-8" />
+    <title>Login</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <style>
+        body {
+            background: url('https://media.tenor.com/-PPC-n5chR4AAAAm/seraph-of-the-end-yuu.webp') no-repeat center center fixed;
+            background-size: cover;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .login-box {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 30px 40px;
+            border-radius: 16px;
+            box-shadow: 0 6px 12px rgba(46, 125, 50, 0.3);
+            width: 100%;
+            max-width: 400px;
+        }
+        .login-box h3 {
+            color: #2e7d32;
+            margin-bottom: 25px;
+        }
+        .btn-green {
+            background-color: #2e7d32;
+            color: white;
+        }
+        .btn-green:hover {
+            background-color: #1b5e20;
+        }
+        label {
+            font-weight: 500;
+        }
+    </style>
 </head>
 <body>
-<div class="container">
-    <h2>User Login</h2>
-
-    <?php if (!empty($errors)): ?>
-        <div class="error">
-            <ul>
-            <?php foreach ($errors as $e): ?>
-                <li><?= htmlspecialchars($e) ?></li>
-            <?php endforeach; ?>
-            </ul>
-        </div>
-    <?php endif; ?>
-
-    <form method="POST" action="login.php" autocomplete="off">
-        <label>Username</label>
-        <input type="text" name="username" required value="<?= htmlspecialchars($_POST['username'] ?? '') ?>">
-
-        <label>Password</label>
-        <input type="password" name="password" required>
-
-        <button type="submit">Login</button>
-    </form>
-
-    <p>Don't have an account? <a href="register.php">Register here</a></p>
-</div>
+    <div class="login-box">
+        <h3 class="text-center">Login</h3>
+        <?php if (!empty($error)): ?>
+            <div class="alert alert-danger"><?= htmlspecialchars($error) ?></div>
+        <?php endif; ?>
+        <form method="POST">
+            <div class="mb-3">
+                <label>Username or Email</label>
+                <input type="text" name="username" class="form-control" required />
+            </div>
+            <div class="mb-3">
+                <label>Password</label>
+                <input type="password" name="password" class="form-control" required />
+            </div>
+            <button class="btn btn-green w-100" type="submit">Login</button>
+        </form>
+    </div>
 </body>
 </html>
